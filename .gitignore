@@ -21,9 +21,6 @@ node_modules/
 .next/
 out/
 
-# Trained model is hosted on Hugging Face; do not commit artifacts
-packages/model/*.pkl
-
 # Editors and operating-system files
 .DS_Store
 Thumbs.db

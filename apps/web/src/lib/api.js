@@ -1,7 +1,9 @@
-const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+const predictionApiUrl = process.env.NEXT_PUBLIC_PREDICTION_API_URL ?? "http://localhost:8001/api/v1";
+const marketApiUrl = process.env.NEXT_PUBLIC_MARKET_API_URL ?? "http://localhost:8002/api/v1";
+const recommendationApiUrl = process.env.NEXT_PUBLIC_RECOMMENDATION_API_URL ?? "http://localhost:8003/api/v1";
 
-async function request(path, options) {
-  const response = await fetch(`${apiUrl}${path}`, options);
+async function request(baseUrl, path, options) {
+  const response = await fetch(`${baseUrl}${path}`, options);
   if (!response.ok) {
     let detail;
     try {
@@ -17,7 +19,7 @@ async function request(path, options) {
 }
 
 export function predictPrice(payload) {
-  return request("/predictions", {
+  return request(predictionApiUrl, "/predictions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -25,13 +27,13 @@ export function predictPrice(payload) {
 }
 
 export function getPredictionOptions() {
-  return request("/predictions/options");
+  return request(predictionApiUrl, "/predictions/options");
 }
 
 export function getMarket(path) {
-  return request(`/market/${path}`);
+  return request(marketApiUrl, `/market/${path}`);
 }
 
 export function getApi(path) {
-  return request(`/${path}`);
+  return request(recommendationApiUrl, `/${path}`);
 }

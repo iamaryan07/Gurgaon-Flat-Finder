@@ -1,8 +1,7 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 
 from app.core.config import settings
 from app.services.market_service import get_market_service
-from app.services.model_service import get_model_service
 
 router = APIRouter(prefix="/market", tags=["market intelligence"])
 
@@ -23,13 +22,7 @@ def sectors() -> list[dict]:
 
 @router.get("/analytics")
 def analytics() -> dict:
-    result = _service().analytics()
-    try:
-        model = get_model_service(settings.model_repo_id, settings.model_filename)
-        result["feature_importance"] = model.feature_importances()
-    except Exception:
-        result["feature_importance"] = []
-    return result
+    return _service().analytics()
 
 
 @router.get("/insights")

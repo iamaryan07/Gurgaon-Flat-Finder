@@ -1,20 +1,30 @@
 # Gurgaon Project
 
-A clean, service-ready rewrite of the Gurgaon flat analysis app.
+A service-oriented rewrite of the Gurgaon flat analysis app. A Next.js interface talks to three independent FastAPI services over HTTP.
 
 ```
 Gurgaon Project/
-  apps/web/                 # Next.js 16 interface
-  services/prediction-api/  # FastAPI prediction service
-  packages/model/           # Runtime model artifact only
+  apps/web/                        # Next.js 16 interface
+  services/
+    prediction-service/            # ML inference + optional prediction history  :8001
+    market-service/                # market analytics / insights                 :8002
+    recommendation-service/        # society / landmark recommendations          :8003
 ```
 
 ## Stack
 
-- **Frontend:** Next.js 16 (App Router, JavaScript/JSX) + Plotly
-- **API:** FastAPI + Pydantic
-- **Database:** PostgreSQL (use Neon or Supabase free tier) with SQLAlchemy + Alembic (optional)
-- **Model:** the existing `property_price_model.pkl` (sklearn Pipeline, loaded at startup)
+- **Frontend:** Next.js 16 (App Router, JavaScript/JSX) + Plotly + Leaflet
+- **Services:** FastAPI + Pydantic (one per domain)
+- **Database:** PostgreSQL (Neon or Supabase free tier) with SQLAlchemy + Alembic (optional, prediction-service only)
+- **Model:** hosted on Hugging Face (`iamAryan/gurgaon-property-price-model`), downloaded at startup
+
+## Services and ports
+
+| Service                   | Port | Responsibilities                                                                 |
+| ------------------------- | ---- | ------------------------------------------------------------------------------- |
+| `prediction-service`      | 8001 | `/api/v1/predictions`, `/api/v1/predictions/options`, HF model loading/inference, optional prediction history |
+| `market-service`          | 8002 | all `/api/v1/market/*` endpoints, `market_data.parquet` analytics and insights  |
+| `recommendation-service`  | 8003 | all `/api/v1/recommendations/*` endpoints, landmark/similarity/hybrid/map logic |
 
 ## Features
 
@@ -29,18 +39,42 @@ The web app exposes four routes under a shared sticky navbar:
 
 ## Run locally
 
-1. Start the API:
+Start each service in its own terminal, then the website.
+
+1. Prediction service:
 
    ```powershell
-   cd services/prediction-api
+   cd services/prediction-service
    python -m venv .venv
    .\.venv\Scripts\Activate.ps1
    pip install -e .
    Copy-Item .env.example .env
-   uvicorn app.main:app --reload --port 8000
+   uvicorn app.main:app --reload --port 8001
    ```
 
-2. Start the website in another terminal:
+2. Market service:
+
+   ```powershell
+   cd services/market-service
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -e .
+   Copy-Item .env.example .env
+   uvicorn app.main:app --reload --port 8002
+   ```
+
+3. Recommendation service:
+
+   ```powershell
+   cd services/recommendation-service
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -e .
+   Copy-Item .env.example .env
+   uvicorn app.main:app --reload --port 8003
+   ```
+
+4. Start the website:
 
    ```powershell
    cd apps/web
@@ -49,23 +83,31 @@ The web app exposes four routes under a shared sticky navbar:
    npm run dev
    ```
 
-Open `http://localhost:3000` (redirects to `/prediction`). The FastAPI docs are at `http://localhost:8000/docs`.
+Open `http://localhost:3000` (redirects to `/prediction`). Each service exposes FastAPI docs at its own `/docs`.
 
 ## Model and data
 
-The model, market dataset and recommendation data are read from `packages/` at startup. If the model file is missing, the API refuses to start (or returns `503`) rather than fabricating predictions. The prediction form's dropdowns are populated from the model's own encoder categories via `GET /api/v1/predictions/options`, so the UI can never drift from the trained feature space.
+The ML model is downloaded from Hugging Face Hub (`iamAryan/gurgaon-property-price-model`) at prediction-service startup. No token is required because the repository is public. If the model cannot be downloaded, the prediction endpoints return `503` rather than fabricating predictions. The prediction form's dropdowns are populated from the model's own encoder categories via `GET /api/v1/predictions/options`, so the UI can never drift from the trained feature space.
 
-## Database and migrations
+Market and recommendation datasets are bundled inside their owning services under `data/`.
 
-Create a free PostgreSQL database at Neon or Supabase, put its connection string in `services/prediction-api/.env`, then run:
+## Frontend configuration
+
+The website calls the three services directly using separate configurable URLs (set in `apps/web/.env.local`):
+
+```
+NEXT_PUBLIC_PREDICTION_API_URL=http://localhost:8001/api/v1
+NEXT_PUBLIC_MARKET_API_URL=http://localhost:8002/api/v1
+NEXT_PUBLIC_RECOMMENDATION_API_URL=http://localhost:8003/api/v1
+```
+
+## Database and migrations (optional)
+
+Prediction history persistence is optional and only affects `prediction-service`. Create a free PostgreSQL database at Neon or Supabase, put its connection string in `services/prediction-service/.env`, then run:
 
 ```powershell
-cd services/prediction-api
+cd services/prediction-service
 alembic upgrade head
 ```
 
 The initial migration creates a `prediction_requests` table for an audit trail. The price prediction endpoint works before configuring the database; persistence is intentionally optional during local UI development.
-
-## Service boundaries
-
-`prediction-api` owns inference and prediction history. Future services such as `market-data-api` or `recommendations-api` can live alongside it under `services/`, with the web app consuming them through their public APIs.

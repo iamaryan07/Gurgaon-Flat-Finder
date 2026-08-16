@@ -1,0 +1,15 @@
+[project]
+name = "gurgaon-market-service"
+version = "0.1.0"
+description = "Market intelligence service for Gurgaon Property Lens"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0", "pandas>=2.2.0", "pyarrow>=18.0.0",
+  "pydantic-settings>=2.6.0", "uvicorn[standard]>=0.32.0",
+]
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100

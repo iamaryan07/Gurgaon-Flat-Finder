@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
-import { getMarket } from "@/lib/api";
+import { getMarket, getPredictionOptions } from "@/lib/api";
 import { MultiSelect } from "@/components/multi-select";
 
 const Plot = dynamic(() => import("react-plotly.js").then((module) => module.default), {
@@ -53,6 +53,7 @@ export function AnalyticsDashboard() {
   const [x, setX] = useState("Built Up Area");
   const [y, setY] = useState("Price");
   const [dist, setDist] = useState("Bedroom");
+  const [featureImportance, setFeatureImportance] = useState([]);
 
   useEffect(() => {
     getMarket("analytics")
@@ -63,6 +64,9 @@ export function AnalyticsDashboard() {
         }
       })
       .catch((caught) => setError(caught instanceof Error ? caught.message : "Failed to load analytics."));
+    getPredictionOptions()
+      .then((options) => setFeatureImportance(options.feature_importance ?? []))
+      .catch(() => setFeatureImportance([]));
   }, []);
 
   const rows = useMemo(() => {
@@ -173,8 +177,8 @@ export function AnalyticsDashboard() {
               {
                 type: "bar",
                 orientation: "h",
-                x: data.feature_importance.map((f) => f.importance).reverse(),
-                y: data.feature_importance.map((f) => f.feature).reverse(),
+                x: featureImportance.map((f) => f.importance).reverse(),
+                y: featureImportance.map((f) => f.feature).reverse(),
                 marker: { color: "#1c5845" },
               },
             ]}
