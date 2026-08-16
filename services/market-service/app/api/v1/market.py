@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Response
 
 from app.core.config import settings
 from app.core.redis_cache import cached
@@ -35,18 +35,5 @@ def analytics(response: Response) -> dict:
 @router.get("/insights")
 def insights(response: Response) -> dict:
     result, hit = cached("market:insights", lambda: _service().insights())
-    response.headers["X-Cache"] = "HIT" if hit else "MISS"
-    return result
-
-
-@router.get("/sector-alternatives")
-def sector_alternatives(
-    response: Response,
-    sector: str = Query(...),
-    bedroom: int = Query(..., ge=1, le=10),
-    budget: float = Query(..., gt=0),
-) -> list[dict]:
-    key = f"market:sector-alternatives:{sector}:{bedroom}:{budget}"
-    result, hit = cached(key, lambda: _service().sector_alternatives(sector, bedroom, budget))
     response.headers["X-Cache"] = "HIT" if hit else "MISS"
     return result

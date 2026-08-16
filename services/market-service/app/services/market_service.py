@@ -99,30 +99,6 @@ class MarketService:
             "sectors": sorted(df["Sector"].unique().tolist()),
         }
 
-    def sector_alternatives(self, sector: str, bedroom: int, budget: float) -> list[dict]:
-        df = self.data
-        groups = (
-            df.groupby("Sector")
-            .agg(
-                price=("Price", "mean"),
-                area=("Built Up Area", "mean"),
-                rating=("Rating", "mean"),
-                bedrooms=("Bedroom", "mean"),
-                listings=("Price", "size"),
-            )
-            .reset_index()
-        )
-        groups = groups[groups["Sector"] != sector].copy()
-        price_penalty = ((groups["price"] - budget).abs() / max(budget, 0.1)) * 55
-        bedroom_penalty = (groups["bedrooms"] - bedroom).abs() * 18
-        groups["match_score"] = (100 - (price_penalty + bedroom_penalty)).clip(upper=95)
-        return (
-            groups.sort_values("match_score", ascending=False)
-            .head(6)
-            .round(2)
-            .to_dict(orient="records")
-        )
-
     def insights(self) -> dict:
         df = self.data
         df = df.assign(price_per_sqft=df["Price"] * 10_000_000 / df["Built Up Area"])

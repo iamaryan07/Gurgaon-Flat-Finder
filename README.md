@@ -154,7 +154,6 @@ Each caching service reads its Redis connection string from `REDIS_URL` (loaded 
 | `market-service`       | `/api/v1/market/sectors`          | `market:sectors`                                     |
 | `market-service`       | `/api/v1/market/analytics`        | `market:analytics`                                   |
 | `market-service`       | `/api/v1/market/insights`         | `market:insights`                                    |
-| `market-service`       | `/api/v1/market/sector-alternatives`  | `market:sector-alternatives:{sector}:{bedroom}:{budget}` |
 | `recommendation-service`| `/api/v1/recommendations/location`| `recommendations:location:{landmark}:{radius}`       |
 | `recommendation-service`| `/api/v1/recommendations/similar` | `recommendations:similar:{property_name}`            |
 | `recommendation-service`| `/api/v1/recommendations/hybrid`  | `recommendations:hybrid:{property_name}:{preference}`|
