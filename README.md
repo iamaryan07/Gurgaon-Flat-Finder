@@ -6,6 +6,7 @@ A service-oriented rewrite of the Gurgaon flat analysis app. A Next.js interface
 Gurgaon Project/
   apps/web/                        # Next.js 16 interface
   services/
+    api-gateway/                   # single backend entry point (proxy/router)   :8000
     prediction-service/            # ML inference + optional prediction history  :8001
     market-service/                # market analytics / insights                 :8002
     recommendation-service/        # society / landmark recommendations          :8003
@@ -22,6 +23,7 @@ Gurgaon Project/
 
 | Service                   | Port | Responsibilities                                                                 |
 | ------------------------- | ---- | ------------------------------------------------------------------------------- |
+| `api-gateway`             | 8000 | single entry point; routes `/api/v1/*` to the three services below (proxying only) |
 | `prediction-service`      | 8001 | `/api/v1/predictions`, `/api/v1/predictions/options`, HF model loading/inference, optional prediction history |
 | `market-service`          | 8002 | all `/api/v1/market/*` endpoints, `market_data.parquet` analytics and insights  |
 | `recommendation-service`  | 8003 | all `/api/v1/recommendations/*` endpoints, landmark/similarity/hybrid/map logic |
@@ -41,7 +43,18 @@ The web app exposes four routes under a shared sticky navbar:
 
 Start each service in its own terminal, then the website.
 
-1. Prediction service:
+1. API gateway:
+
+   ```powershell
+   cd services/api-gateway
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -e .
+   Copy-Item .env.example .env
+   uvicorn app.main:app --reload --port 8000
+   ```
+
+2. Prediction service:
 
    ```powershell
    cd services/prediction-service
@@ -52,7 +65,7 @@ Start each service in its own terminal, then the website.
    uvicorn app.main:app --reload --port 8001
    ```
 
-2. Market service:
+3. Market service:
 
    ```powershell
    cd services/market-service
@@ -63,7 +76,7 @@ Start each service in its own terminal, then the website.
    uvicorn app.main:app --reload --port 8002
    ```
 
-3. Recommendation service:
+4. Recommendation service:
 
    ```powershell
    cd services/recommendation-service
@@ -74,7 +87,7 @@ Start each service in its own terminal, then the website.
    uvicorn app.main:app --reload --port 8003
    ```
 
-4. Start the website:
+5. Start the website:
 
    ```powershell
    cd apps/web
@@ -83,7 +96,7 @@ Start each service in its own terminal, then the website.
    npm run dev
    ```
 
-Open `http://localhost:3000` (redirects to `/prediction`). Each service exposes FastAPI docs at its own `/docs`.
+Open `http://localhost:3000` (redirects to `/prediction`). Each service and the gateway expose FastAPI docs at their own `/docs`.
 
 ## Model and data
 
@@ -91,14 +104,24 @@ The ML model is downloaded from Hugging Face Hub (`iamAryan/gurgaon-property-pri
 
 Market and recommendation datasets are bundled inside their owning services under `data/`.
 
+## API gateway
+
+The gateway is the single backend entry point for the website. It proxies `/api/v1/*` requests to the appropriate service without duplicating any business logic:
+
+| Gateway path                | Downstream service          |
+| --------------------------- | --------------------------- |
+| `/api/v1/predictions/*`     | `prediction-service :8001`  |
+| `/api/v1/market/*`          | `market-service :8002`      |
+| `/api/v1/recommendations/*` | `recommendation-service :8003` |
+
+Downstream URLs are configurable in `services/api-gateway/.env` with local defaults (`PREDICTION_SERVICE_URL`, `MARKET_SERVICE_URL`, `RECOMMENDATION_SERVICE_URL`). `GET /health` on the gateway reports the gateway's own status.
+
 ## Frontend configuration
 
-The website calls the three services directly using separate configurable URLs (set in `apps/web/.env.local`):
+The website calls the gateway with a single configurable base URL (set in `apps/web/.env.local`):
 
 ```
-NEXT_PUBLIC_PREDICTION_API_URL=http://localhost:8001/api/v1
-NEXT_PUBLIC_MARKET_API_URL=http://localhost:8002/api/v1
-NEXT_PUBLIC_RECOMMENDATION_API_URL=http://localhost:8003/api/v1
+NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
 ```
 
 ## Database and migrations (optional)
