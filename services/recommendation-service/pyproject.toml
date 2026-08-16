@@ -5,7 +5,7 @@ description = "Society recommendation service for Gurgaon Property Lens"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115.0", "geopy>=2.4.0", "joblib>=1.4.0", "pandas>=2.2.0",
-  "pydantic-settings>=2.6.0", "scikit-learn==1.7.1", "uvicorn[standard]>=0.32.0",
+  "pydantic-settings>=2.6.0", "redis>=5.0.0", "scikit-learn==1.7.1", "uvicorn[standard]>=0.32.0",
 ]
 
 [tool.setuptools]

@@ -14,6 +14,9 @@ class Settings(BaseSettings):
 
     market_data_path: Path = Path("data/market_data.parquet")
 
+    redis_url: str = ""
+    redis_cache_ttl_seconds: int = 600
+
     web_origin: str = "http://localhost:3000"
 
     @property

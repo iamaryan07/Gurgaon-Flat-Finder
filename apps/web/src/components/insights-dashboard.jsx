@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { getMarket, predictPrice } from "@/lib/api";
+import { SectorAlternatives } from "@/components/sector-alternatives";
 
 const Plot = dynamic(() => import("react-plotly.js").then((module) => module.default), {
   ssr: false,
@@ -228,6 +229,7 @@ export function InsightsDashboard() {
           </div>
         )}
       </section>
+      <SectorAlternatives />
     </div>
   );
 }

@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     geo_cache_path: Path = Path("data/geo_cache.pkl")
     geo_cache_old_path: Path = Path("data/geo_cache_old.pkl")
 
+    redis_url: str = ""
+    redis_cache_ttl_seconds: int = 600
+
     web_origin: str = "http://localhost:3000"
 
     @property

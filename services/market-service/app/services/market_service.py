@@ -99,7 +99,7 @@ class MarketService:
             "sectors": sorted(df["Sector"].unique().tolist()),
         }
 
-    def recommendations(self, sector: str, bedroom: int, budget: float) -> list[dict]:
+    def sector_alternatives(self, sector: str, bedroom: int, budget: float) -> list[dict]:
         df = self.data
         groups = (
             df.groupby("Sector")
