@@ -2,7 +2,8 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
-import { getMarket, predictPrice } from "@/lib/api";
+import { getMarket } from "@/lib/api";
+import { WhatIfStudio } from "@/components/what-if-studio";
 
 const Plot = dynamic(() => import("react-plotly.js").then((module) => module.default), {
   ssr: false,
@@ -17,35 +18,6 @@ const baseLayout = {
   colorway: ["#1c5845", "#4c8a70", "#c4a86c"],
 };
 
-const WHAT_IF_FEATURES = [
-  ["built_up_area", "Built-up area (ft²)", 50],
-  ["bedroom", "Bedrooms", 1],
-  ["bathroom", "Bathrooms", 1],
-  ["rating", "Rating", 0.1],
-  ["floor_num", "Floor number", 1],
-];
-
-const base = {
-  sector: "Sector 65",
-  built_up_area: 1500,
-  bedroom: 3,
-  bathroom: 3,
-  balcony: 2,
-  floor_num: 5,
-  total_floor: 15,
-  property_age: "1 to 5 Year Old",
-  furnishing: "Semi Furnished",
-  power_backup: "Full",
-  covered_parking: 1,
-  open_parking: 0,
-  rating: 3.8,
-  nearby: "Education",
-  overlooking: "Club",
-  servant_room: false,
-  store_room: false,
-  study_room: false,
-};
-
 function rupees(crore) {
   return `₹ ${Number(crore).toFixed(2)} Cr`;
 }
@@ -53,12 +25,6 @@ function rupees(crore) {
 export function InsightsDashboard() {
   const [insights, setInsights] = useState(null);
   const [error, setError] = useState("");
-
-  const [feature, setFeature] = useState("built_up_area");
-  const [from, setFrom] = useState(1500);
-  const [to, setTo] = useState(1800);
-  const [result, setResult] = useState(null);
-  const [calculating, setCalculating] = useState(false);
 
   useEffect(() => {
     getMarket("insights")
@@ -68,25 +34,8 @@ export function InsightsDashboard() {
       );
   }, []);
 
-  async function calculate(event) {
-    event.preventDefault();
-    setCalculating(true);
-    try {
-      const before = { ...base, [feature]: Number(from) };
-      const after = { ...base, [feature]: Number(to) };
-      const [a, b] = await Promise.all([predictPrice(before), predictPrice(after)]);
-      setResult({ a, b });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Comparison failed.");
-    } finally {
-      setCalculating(false);
-    }
-  }
-
   if (error && !insights) return <p className="error">{error}</p>;
   if (!insights) return <p className="loading">Loading market insights…</p>;
-
-  const step = WHAT_IF_FEATURES.find(([id]) => id === feature)?.[2] ?? 1;
 
   return (
     <div className="tool-content insights">
@@ -98,6 +47,8 @@ export function InsightsDashboard() {
           packaged Gurgaon market dataset.
         </p>
       </div>
+
+      <WhatIfStudio />
 
       <div className="metric-row">
         <article>
@@ -179,55 +130,6 @@ export function InsightsDashboard() {
         <SectorList title="Most affordable sectors" items={insights.affordable_sectors} metric="average_price" />
         <SectorList title="Best value (₹/sq ft)" items={insights.best_value_sectors} metric="average_price_per_sqft" />
       </div>
-
-      <section>
-        <h3>What-if studio</h3>
-        <p className="data-note">
-          Hold a typical Gurgaon property constant and test the impact of a single
-          feature on the model estimate.
-        </p>
-        <form className="compact-form insight-form" onSubmit={calculate}>
-          <label>
-            Feature
-            <select value={feature} onChange={(e) => setFeature(e.target.value)}>
-              {WHAT_IF_FEATURES.map(([id, label]) => (
-                <option key={id} value={id}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Current value
-            <input type="number" value={from} step={step} onChange={(e) => setFrom(e.target.value)} />
-          </label>
-          <label>
-            New value
-            <input type="number" value={to} step={step} onChange={(e) => setTo(e.target.value)} />
-          </label>
-          <button disabled={calculating}>{calculating ? "Comparing…" : "Compare values"}</button>
-        </form>
-
-        {result && (
-          <div className="impact">
-            <div>
-              <span>Current estimate</span>
-              <b>{rupees(result.a.predicted_price_crore)}</b>
-            </div>
-            <div>
-              <span>New estimate</span>
-              <b>{rupees(result.b.predicted_price_crore)}</b>
-            </div>
-            <div className="delta">
-              <span>Estimated change</span>
-              <b>
-                {(result.b.predicted_price_crore - result.a.predicted_price_crore) >= 0 ? "+" : ""}
-                {rupees(result.b.predicted_price_crore - result.a.predicted_price_crore)}
-              </b>
-            </div>
-          </div>
-        )}
-      </section>
     </div>
   );
 }
