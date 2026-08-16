@@ -1,0 +1,29 @@
+# Environment and local state
+.env
+.env.*
+!.env.example
+!.env.local.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Python tooling
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.ipynb_checkpoints/
+
+# Next.js
+node_modules/
+.next/
+out/
+
+# Trained model is hosted on Hugging Face; do not commit artifacts
+packages/model/*.pkl
+
+# Editors and operating-system files
+.DS_Store
+Thumbs.db
