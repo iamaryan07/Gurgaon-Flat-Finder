@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     model_repo_id: str = "iamAryan/gurgaon-property-price-model"
     model_filename: str = "property_price_model.pkl"
 
-    database_url: str | None = None
+    rabbitmq_url: str = ""
     web_origin: str = "http://localhost:3000"
 
 

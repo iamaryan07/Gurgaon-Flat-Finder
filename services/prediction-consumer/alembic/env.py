@@ -3,12 +3,13 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from app.core.config import settings
 from app.db.base import Base
+from app.db.connection import connection_url
 
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
 if settings.database_url:
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+    config.set_main_option("sqlalchemy.url", connection_url(settings.database_url))
 target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:

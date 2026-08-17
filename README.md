@@ -7,7 +7,8 @@ Gurgaon Project/
   apps/web/                        # Next.js 16 interface
   services/
     api-gateway/                   # single backend entry point (proxy/router)   :8000
-    prediction-service/            # ML inference + optional prediction history  :8001
+    prediction-service/            # ML inference + publishes prediction events  :8001
+    prediction-consumer/           # consumes events, persists to PostgreSQL     (no port)
     market-service/                # market analytics / insights                 :8002
     recommendation-service/        # society / landmark recommendations          :8003
 ```
@@ -16,7 +17,8 @@ Gurgaon Project/
 
 - **Frontend:** Next.js 16 (App Router, JavaScript/JSX) + Plotly + Leaflet
 - **Services:** FastAPI + Pydantic (one per domain)
-- **Database:** PostgreSQL (Neon or Supabase free tier) with SQLAlchemy + Alembic (optional, prediction-service only)
+- **Messaging:** RabbitMQ (CloudAMQP or local Docker) for async prediction persistence
+- **Database:** PostgreSQL (Neon free tier) with SQLAlchemy + Alembic, owned by `prediction-consumer`
 - **Model:** hosted on Hugging Face (`iamAryan/gurgaon-property-price-model`), downloaded at startup
 
 ## Services and ports
@@ -24,7 +26,8 @@ Gurgaon Project/
 | Service                   | Port | Responsibilities                                                                 |
 | ------------------------- | ---- | ------------------------------------------------------------------------------- |
 | `api-gateway`             | 8000 | single entry point; routes `/api/v1/*` to the three services below (proxying only) |
-| `prediction-service`      | 8001 | `/api/v1/predictions`, `/api/v1/predictions/options`, HF model loading/inference, optional prediction history |
+| `prediction-service`      | 8001 | `/api/v1/predictions`, `/api/v1/predictions/options`, HF model loading/inference, publishes `prediction_created` events |
+| `prediction-consumer`     | —    | consumes `prediction_created` from RabbitMQ, persists audit records to PostgreSQL |
 | `market-service`          | 8002 | all `/api/v1/market/*` endpoints, `market_data.parquet` analytics and insights  |
 | `recommendation-service`  | 8003 | all `/api/v1/recommendations/*` endpoints, landmark/similarity/hybrid/map logic |
 
@@ -65,7 +68,19 @@ Start each service in its own terminal, then the website.
    uvicorn app.main:app --reload --port 8001
    ```
 
-3. Market service:
+3. Prediction consumer (optional — only needed for async persistence):
+
+   ```powershell
+   cd services/prediction-consumer
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -e .
+   Copy-Item .env.example .env
+   alembic upgrade head
+   python -m app.consumer
+   ```
+
+4. Market service:
 
    ```powershell
    cd services/market-service
@@ -76,7 +91,7 @@ Start each service in its own terminal, then the website.
    uvicorn app.main:app --reload --port 8002
    ```
 
-4. Recommendation service:
+5. Recommendation service:
 
    ```powershell
    cd services/recommendation-service
@@ -87,7 +102,7 @@ Start each service in its own terminal, then the website.
    uvicorn app.main:app --reload --port 8003
    ```
 
-5. Start the website:
+6. Start the website:
 
    ```powershell
    cd apps/web
@@ -168,13 +183,71 @@ Redis is strictly optional. If `REDIS_URL` is unset, or Redis is unreachable / t
 
 `recommendation-service` keeps its existing local geo-cache (`GEO_CACHE_PATH=data/geo_cache.pkl`, plus `GEO_CACHE_OLD_PATH`). Redis is an *additional* application-level cache for the final API response — it does not replace or modify the geo-cache files or the underlying recommendation logic.
 
-## Database and migrations (optional)
+## Async messaging (RabbitMQ)
 
-Prediction history persistence is optional and only affects `prediction-service`. Create a free PostgreSQL database at Neon or Supabase, put its connection string in `services/prediction-service/.env`, then run:
+Predictions are returned synchronously, but their audit trail is persisted asynchronously through RabbitMQ so the price API never waits on the database.
+
+```
+        Next.js
+          |
+          v
+     API Gateway
+          |
+          v
+   Prediction Service -------------------> HTTP response (predicted price)
+          |
+          |  prediction_created event
+          v
+      CloudAMQP / RabbitMQ
+          |
+          v
+   Prediction Consumer
+          |
+          v
+      Neon PostgreSQL
+```
+
+The flow is `producer → exchange → queue → consumer`:
+
+1. `prediction-service` runs the ML inference and returns the predicted price immediately.
+2. After a successful prediction it publishes a `prediction_created` event to the **topic exchange** `prediction_events` with routing key `prediction_created`.
+3. The durable queue `prediction_created` is bound to that routing key, so the event lands in the queue.
+4. `prediction-consumer` consumes the queue, validates the event, persists the audit record to Neon PostgreSQL, and only then acknowledges the message.
+
+A topic exchange routes on the event name (routing key), so it behaves like a `direct` exchange today while leaving room to add more event types later without adding exchanges.
+
+### Configuration
+
+`prediction-service` and `prediction-consumer` both read the broker URL from `RABBITMQ_URL` (loaded from `services/*/.env`). No credentials are committed — `.env` is git-ignored and `.env.example` only contains the empty placeholder `RABBITMQ_URL=`. Switching between CloudAMQP and a local broker is just an environment-variable change.
+
+### CloudAMQP vs local RabbitMQ
+
+Use the CloudAMQP URL you were given as `RABBITMQ_URL`. To run a broker locally instead, start RabbitMQ with Docker:
 
 ```powershell
-cd services/prediction-service
+docker run -d --name rabbitmq -p 5672:5672 rabbitmq:3-management
+```
+
+then set:
+
+```
+RABBITMQ_URL=amqp://guest:guest@localhost:5672/
+```
+
+No other part of the application requires Docker.
+
+### Failure handling
+
+- If `RABBITMQ_URL` is unset, or the broker is unreachable, `prediction-service` logs a single generic warning and still returns the prediction normally. The credentials are never logged.
+- The consumer uses manual acknowledgements: it acks a message only after the PostgreSQL write commits successfully. If persistence fails it nacks (requeues) the message so RabbitMQ redelivers it — failed writes are never silently lost. Messages are published as persistent, so they also survive a consumer restart.
+
+## Database and migrations
+
+Persistence is owned by `prediction-consumer`. Create a free PostgreSQL database at Neon, put its connection string in `services/prediction-consumer/.env` as `DATABASE_URL`, then run:
+
+```powershell
+cd services/prediction-consumer
 alembic upgrade head
 ```
 
-The initial migration creates a `prediction_requests` table for an audit trail. The price prediction endpoint works before configuring the database; persistence is intentionally optional during local UI development.
+The initial migration creates a `prediction_requests` table (`request_payload`, `predicted_price_crore`, `created_at`) for the audit trail. The consumer exits with a clear error if `DATABASE_URL` is unset, and the price prediction endpoint works without any database configured — persistence is intentionally optional during local UI development.
