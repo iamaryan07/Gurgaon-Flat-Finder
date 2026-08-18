@@ -113,6 +113,104 @@ Start each service in its own terminal, then the website.
 
 Open `http://localhost:3000` (redirects to `/prediction`). Each service and the gateway expose FastAPI docs at their own `/docs`.
 
+## Docker
+
+Instead of starting each service in its own terminal (see [Run locally](#run-locally)), the whole system can be started with Docker Compose. Docker builds one container per component, connects them on a shared network, and talks to the four external managed services (Redis Cloud, CloudAMQP, Neon PostgreSQL, Hugging Face) through environment variables — those are **not** containerized.
+
+### Architecture
+
+```
+                        Docker (gurgaon network)
+   ┌──────────────────────────────────────────────────────────────┐
+   │                                                              │
+   │   Next.js (web) ──:3000──► API Gateway ──:8000──┬──► Prediction Service :8001 ──► RabbitMQ (CloudAMQP)
+   │                                                 ├──► Market Service :8002 ──► Redis (Redis Cloud)
+   │                                                 └──► Recommendation Service :8003 ──► Redis (Redis Cloud)
+   │                                                          ▲                              │
+   │                                                          │                              ▼
+   │                                                          └──────── Prediction Consumer (no port) ──► Neon PostgreSQL
+   │                                                                                              │
+   └──────────────────────────────────────────────────────────────┘
+                                                                                                 │
+   Hugging Face (model download at startup) ◄── Prediction Service                              │
+   Neon PostgreSQL ◄─────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Docker containers:** Next.js, API Gateway, Prediction Service, Market Service, Recommendation Service, Prediction Consumer.
+- **External managed services:** Redis Cloud, CloudAMQP (RabbitMQ), Neon PostgreSQL, Hugging Face. These are never run inside Compose.
+
+### Prerequisites
+
+- Docker (with the Compose v2 plugin, i.e. `docker compose` works).
+- Network access to the external services (Hugging Face for the model, CloudAMQP, Neon, Redis Cloud).
+
+### Configure environment variables
+
+Environment variables are read from two places:
+
+1. **prediction-service** and **prediction-consumer** read their variables directly from their own `.env` files (wired via `env_file` in `docker-compose.yml`):
+
+   ```powershell
+   Copy-Item services/prediction-service/.env.example services/prediction-service/.env
+   Copy-Item services/prediction-consumer/.env.example services/prediction-consumer/.env
+   ```
+
+   - `services/prediction-service/.env` → `RABBITMQ_URL` (leave empty to skip async persistence)
+   - `services/prediction-consumer/.env` → `RABBITMQ_URL` and `DATABASE_URL` (both required for the consumer to start)
+
+2. **market-service** and **recommendation-service** read their Redis connection string from a root `.env` file (next to `docker-compose.yml`):
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+   Then edit `.env` and fill in the real connection string:
+
+   | Variable       | Used by                                          | Notes                                    |
+   | -------------- | ------------------------------------------------ | ---------------------------------------- |
+   | `REDIS_URL`    | market-service, recommendation-service           | Redis Cloud; leave empty to disable caching |
+
+The Hugging Face model repository (`MODEL_REPO_ID` / `MODEL_FILENAME`) has sane defaults already baked into `docker-compose.yml`, so no configuration is required for it. No credentials are ever committed — `.env` is git-ignored and only `.env.example` files are tracked, and no `.env` file is copied into any image (each `.dockerignore` excludes `.env`).
+
+### Running
+
+```powershell
+docker compose build       # build all six images
+docker compose up --build  # build (if needed) and start the complete local application
+docker compose down        # stop and remove the containers
+```
+
+`docker compose up --build` starts the frontend, the gateway, all three backend services, and the prediction consumer together. The frontend is served at `http://localhost:3000` and calls the gateway, which proxies `/api/v1/*` to the correct backend service over the Docker network.
+
+### Database migrations (one-off)
+
+The `prediction_requests` table must exist before the consumer can persist anything. Run the Alembic migration once (the consumer image already ships `alembic` and the migration files):
+
+```powershell
+docker compose run --rm prediction-consumer alembic upgrade head
+```
+
+### Ports
+
+| Container             | Container port | Host port | Notes                                        |
+| --------------------- | -------------- | --------- | -------------------------------------------- |
+| `web`                 | 3000           | 3000      | Next.js interface                            |
+| `api-gateway`         | 8000           | 8000      | single HTTP entry point for the backend      |
+| `prediction-service`  | 8001           | —         | internal only (reached via the gateway)      |
+| `market-service`      | 8002           | —         | internal only (reached via the gateway)      |
+| `recommendation-service` | 8003        | —         | internal only (reached via the gateway)      |
+| `prediction-consumer` | —              | —         | worker; no HTTP port                        |
+
+Only the frontend and the gateway are exposed to the host; everything else is reachable only inside the `gurgaon` network using Docker service names (e.g. the gateway calls `http://prediction-service:8001`).
+
+### Prediction consumer
+
+The consumer runs as a worker process (`python -m app.consumer`), not an HTTP server, so it exposes no port and has no health endpoint. It connects to CloudAMQP, consumes `prediction_created` events from the durable `prediction_created` queue, validates each event, writes the audit record to Neon PostgreSQL, and only then acknowledges the message (failed writes are nacked/requeued).
+
+### Docker vs. existing local development
+
+The Docker setup is a convenience wrapper around the same code — it does not change the architecture or business logic. The per-terminal workflow in [Run locally](#run-locally) still works exactly as before; the two approaches can coexist.
+
 ## Model and data
 
 The ML model is downloaded from Hugging Face Hub (`iamAryan/gurgaon-property-price-model`) at prediction-service startup. No token is required because the repository is public. If the model cannot be downloaded, the prediction endpoints return `503` rather than fabricating predictions. The prediction form's dropdowns are populated from the model's own encoder categories via `GET /api/v1/predictions/options`, so the UI can never drift from the trained feature space.
