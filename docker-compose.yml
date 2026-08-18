@@ -5,7 +5,7 @@ x-prediction-service: &prediction-service
   environment:
     MODEL_REPO_ID: ${MODEL_REPO_ID:-iamAryan/gurgaon-property-price-model}
     MODEL_FILENAME: ${MODEL_FILENAME:-property_price_model.pkl}
-    WEB_ORIGIN: http://localhost:3000
+    WEB_ORIGIN: http://15.206.158.156
   networks:
     - gurgaon
   healthcheck:
@@ -16,13 +16,31 @@ x-prediction-service: &prediction-service
     start_period: 180s
 
 services:
+  public-load-balancer:
+    image: nginx:alpine
+    volumes:
+      - ./services/public-load-balancer/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "80:80"
+    depends_on:
+      web:
+        condition: service_healthy
+      api-gateway:
+        condition: service_healthy
+    networks:
+      - gurgaon
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   web:
     build:
       context: ./apps/web
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
-    ports:
-      - "3000:3000"
+        NEXT_PUBLIC_API_URL: http://15.206.158.156/api/v1
     depends_on:
       api-gateway:
         condition: service_healthy
@@ -37,13 +55,11 @@ services:
 
   api-gateway:
     build: ./services/api-gateway
-    ports:
-      - "8000:8000"
     environment:
       PREDICTION_SERVICE_URL: http://prediction-load-balancer:8001
       MARKET_SERVICE_URL: http://market-service:8002
       RECOMMENDATION_SERVICE_URL: http://recommendation-service:8003
-      WEB_ORIGIN: http://localhost:3000
+      WEB_ORIGIN: http://15.206.158.156
     depends_on:
       prediction-load-balancer:
         condition: service_healthy
@@ -92,7 +108,7 @@ services:
       - services/market-service/.env
     environment:
       REDIS_CACHE_TTL_SECONDS: ${REDIS_CACHE_TTL_SECONDS:-600}
-      WEB_ORIGIN: http://localhost:3000
+      WEB_ORIGIN: http://15.206.158.156
     networks:
       - gurgaon
     healthcheck:
@@ -108,7 +124,7 @@ services:
       - services/recommendation-service/.env
     environment:
       REDIS_CACHE_TTL_SECONDS: ${REDIS_CACHE_TTL_SECONDS:-600}
-      WEB_ORIGIN: http://localhost:3000
+      WEB_ORIGIN: http://15.206.158.156
     networks:
       - gurgaon
     healthcheck:

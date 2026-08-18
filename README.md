@@ -7,7 +7,8 @@ Gurgaon Project/
   apps/web/                        # Next.js 16 interface
   services/
     api-gateway/                   # single backend entry point (proxy/router)   :8000
-    prediction-load-balancer/      # Nginx reverse proxy in front of prediction  :8001 (internal)
+    public-load-balancer/          # public Nginx reverse proxy (external entry) :80
+    prediction-load-balancer/      # internal Nginx in front of prediction       :8001 (internal)
     prediction-service/            # ML inference + publishes prediction events  :8001 (x2 replicas)
     prediction-consumer/           # consumes events, persists to PostgreSQL     (no port)
     market-service/                # market analytics / insights                 :8002
@@ -26,6 +27,7 @@ Gurgaon Project/
 
 | Service                   | Port | Responsibilities                                                                 |
 | ------------------------- | ---- | ------------------------------------------------------------------------------- |
+| `public-load-balancer`    | 80   | public entry point; Nginx reverse proxy routing `/` → web and `/api/` → gateway |
 | `api-gateway`             | 8000 | single entry point; routes `/api/v1/*` to the services below (proxying only) |
 | `prediction-load-balancer`| 8001 (internal) | Nginx reverse proxy; round-robins prediction requests across the two replicas |
 | `prediction-service`      | 8001 | `/api/v1/predictions`, `/api/v1/predictions/options`, HF model loading/inference, publishes `prediction_created` events (runs as two replicas: `prediction-service-1`, `prediction-service-2`) |
@@ -122,26 +124,46 @@ Instead of starting each service in its own terminal (see [Run locally](#run-loc
 ### Architecture
 
 ```
-                        Docker (gurgaon network)
-   ┌──────────────────────────────────────────────────────────────────────────────────────┐
-   │                                                                                      │
-   │   Next.js (web) ──:3000──► API Gateway ──:8000──┬──► Prediction LB :8001 ──► RabbitMQ (CloudAMQP)
-   │                                                 │            ├──► prediction-service-1 :8001
-   │                                                 │            └──► prediction-service-2 :8001
-   │                                                 ├──► Market Service :8002 ──► Redis (Redis Cloud)
-   │                                                 └──► Recommendation Service :8003 ──► Redis (Redis Cloud)
-   │                                                          ▲                              │
-   │                                                          │                              ▼
-   │                                                          └──────── Prediction Consumer (no port) ──► Neon PostgreSQL
-   │                                                                                              │
-   └──────────────────────────────────────────────────────────────────────────────┘
-                                                                                                  │
-   Hugging Face (model download at startup) ◄── prediction-service-1 / prediction-service-2       │
-   Neon PostgreSQL ◄─────────────────────────────────────────────────────────────────────────────┘
+                        Internet
+                           │
+                           ▼
+                   Public Nginx :80 (public-load-balancer)
+                      /            \
+                     /              \
+                    ▼                ▼
+             Next.js (web) :3000   API Gateway :8000
+                                       │
+                                       ▼
+                                Prediction LB :8001 ──► RabbitMQ (CloudAMQP)
+                                   /          \
+                                  ▼            ▼
+                  prediction-service-1 :8001   prediction-service-2 :8001
+                                       │
+                                       ├──► Market Service :8002 ──► Redis (Redis Cloud)
+                                       └──► Recommendation Service :8003 ──► Redis (Redis Cloud)
+                                                ▲                              │
+                                                │                              ▼
+                                                └────── Prediction Consumer (no port) ──► Neon PostgreSQL
 ```
 
-- **Docker containers:** Next.js, API Gateway, Prediction Load Balancer (Nginx), Prediction Service ×2 replicas, Market Service, Recommendation Service, Prediction Consumer.
+- **Docker containers:** Public Nginx, Next.js, API Gateway, Prediction Load Balancer (Nginx), Prediction Service ×2 replicas, Market Service, Recommendation Service, Prediction Consumer.
 - **External managed services:** Redis Cloud, CloudAMQP (RabbitMQ), Neon PostgreSQL, Hugging Face. These are never run inside Compose.
+
+The **public Nginx** (`public-load-balancer`) is the only container exposed to the host (port `80`). Everything else is reached over the Docker network using service names.
+
+### Public Nginx vs. Internal Prediction Nginx
+
+There are two distinct Nginx containers, and they serve different purposes:
+
+| Nginx                     | Role                                                        | Exposed |
+| ------------------------- | ----------------------------------------------------------- | ------- |
+| `public-load-balancer`    | external entry point / reverse proxy (Internet → app)        | `80:80` |
+| `prediction-load-balancer`| internal load balancer across `prediction-service` replicas  | none    |
+
+- **Public Nginx** (`services/public-load-balancer/nginx.conf`) listens on port `80` and is the single external entry point. It routes `/` to `web:3000` (Next.js) and `/api/` to `api-gateway:8000`, preserving the request method, query string, headers and body. It also serves a static `/health` endpoint and contains no business logic.
+- **Internal Prediction Nginx** (`services/prediction-load-balancer/nginx.conf`) listens on port `8001` inside the Docker network and round-robins `/api/v1/predictions/*` requests across `prediction-service-1` and `prediction-service-2`. It is unchanged by the public load balancer.
+
+Market and recommendation requests continue to flow through the API Gateway: `Public Nginx → API Gateway → { Market Service, Recommendation Service, Prediction Load Balancer }`.
 
 ### Prerequisites
 
@@ -178,7 +200,7 @@ docker compose up --build  # build (if needed) and start the complete local appl
 docker compose down        # stop and remove the containers
 ```
 
-`docker compose up --build` starts the frontend, the gateway, the prediction load balancer, both prediction-service replicas, the market and recommendation services, and the prediction consumer together. The frontend is served at `http://localhost:3000` and calls the gateway, which proxies `/api/v1/*` to the correct backend service over the Docker network. Prediction requests are distributed across the two replicas by the load balancer (see [Load balancing & horizontal scaling](#load-balancing--horizontal-scaling)).
+`docker compose up --build` starts the public Nginx, the frontend, the gateway, the prediction load balancer, both prediction-service replicas, the market and recommendation services, and the prediction consumer together. The public Nginx is the external entry point on port `80`: `/` is served by Next.js (`web`) and `/api/` is proxied to the gateway, which proxies `/api/v1/*` to the correct backend service over the Docker network. Prediction requests are distributed across the two replicas by the load balancer (see [Load balancing & horizontal scaling](#load-balancing--horizontal-scaling)).
 
 ### Database migrations (one-off)
 
@@ -192,8 +214,9 @@ docker compose run --rm prediction-consumer alembic upgrade head
 
 | Container             | Container port | Host port | Notes                                        |
 | --------------------- | -------------- | --------- | -------------------------------------------- |
-| `web`                 | 3000           | 3000      | Next.js interface                            |
-| `api-gateway`         | 8000           | 8000      | single HTTP entry point for the backend      |
+| `public-load-balancer`| 80             | 80        | external entry point; Nginx reverse proxy     |
+| `web`                 | 3000           | —         | Next.js interface (reached via public Nginx) |
+| `api-gateway`         | 8000           | —         | single HTTP entry point for the backend      |
 | `prediction-load-balancer` | 8001      | —         | internal only; Nginx in front of the replicas |
 | `prediction-service-1` | 8001          | —         | internal only (reached via the load balancer) |
 | `prediction-service-2` | 8001          | —         | internal only (reached via the load balancer) |
@@ -201,7 +224,7 @@ docker compose run --rm prediction-consumer alembic upgrade head
 | `recommendation-service` | 8003        | —         | internal only (reached via the gateway)      |
 | `prediction-consumer` | —              | —         | worker; no HTTP port                        |
 
-Only the frontend and the gateway are exposed to the host; everything else is reachable only inside the `gurgaon` network using Docker service names (e.g. the gateway calls `http://prediction-load-balancer:8001`, which forwards to `prediction-service-1` / `prediction-service-2`).
+Only the public Nginx is exposed to the host (port `80`); everything else is reachable only inside the `gurgaon` network using Docker service names (e.g. the gateway calls `http://prediction-load-balancer:8001`, which forwards to `prediction-service-1` / `prediction-service-2`).
 
 ### Prediction consumer
 
@@ -314,11 +337,13 @@ These are two different distribution concerns and should not be confused:
 
 ## Frontend configuration
 
-The website calls the gateway with a single configurable base URL (set in `apps/web/.env.local`):
+The website calls the gateway with a single configurable base URL. For local development it is set in `apps/web/.env.local`:
 
 ```
 NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
 ```
+
+In the Docker/AWS deployment, the browser reaches both the frontend and the API through the same public origin (the public Nginx on port `80`), so the Compose build argument is set to `http://<public-ip>/api/v1` — see `NEXT_PUBLIC_API_URL` in the `web` service of `docker-compose.yml`. The frontend API functions and paths are unchanged; only the base URL differs.
 
 ## Redis caching
 
