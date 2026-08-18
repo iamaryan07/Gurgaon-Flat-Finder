@@ -7,7 +7,8 @@ Gurgaon Project/
   apps/web/                        # Next.js 16 interface
   services/
     api-gateway/                   # single backend entry point (proxy/router)   :8000
-    prediction-service/            # ML inference + publishes prediction events  :8001
+    prediction-load-balancer/      # Nginx reverse proxy in front of prediction  :8001 (internal)
+    prediction-service/            # ML inference + publishes prediction events  :8001 (x2 replicas)
     prediction-consumer/           # consumes events, persists to PostgreSQL     (no port)
     market-service/                # market analytics / insights                 :8002
     recommendation-service/        # society / landmark recommendations          :8003
@@ -25,8 +26,9 @@ Gurgaon Project/
 
 | Service                   | Port | Responsibilities                                                                 |
 | ------------------------- | ---- | ------------------------------------------------------------------------------- |
-| `api-gateway`             | 8000 | single entry point; routes `/api/v1/*` to the three services below (proxying only) |
-| `prediction-service`      | 8001 | `/api/v1/predictions`, `/api/v1/predictions/options`, HF model loading/inference, publishes `prediction_created` events |
+| `api-gateway`             | 8000 | single entry point; routes `/api/v1/*` to the services below (proxying only) |
+| `prediction-load-balancer`| 8001 (internal) | Nginx reverse proxy; round-robins prediction requests across the two replicas |
+| `prediction-service`      | 8001 | `/api/v1/predictions`, `/api/v1/predictions/options`, HF model loading/inference, publishes `prediction_created` events (runs as two replicas: `prediction-service-1`, `prediction-service-2`) |
 | `prediction-consumer`     | —    | consumes `prediction_created` from RabbitMQ, persists audit records to PostgreSQL |
 | `market-service`          | 8002 | all `/api/v1/market/*` endpoints, `market_data.parquet` analytics and insights  |
 | `recommendation-service`  | 8003 | all `/api/v1/recommendations/*` endpoints, landmark/similarity/hybrid/map logic |
@@ -121,22 +123,24 @@ Instead of starting each service in its own terminal (see [Run locally](#run-loc
 
 ```
                         Docker (gurgaon network)
-   ┌──────────────────────────────────────────────────────────────┐
-   │                                                              │
-   │   Next.js (web) ──:3000──► API Gateway ──:8000──┬──► Prediction Service :8001 ──► RabbitMQ (CloudAMQP)
+   ┌──────────────────────────────────────────────────────────────────────────────────────┐
+   │                                                                                      │
+   │   Next.js (web) ──:3000──► API Gateway ──:8000──┬──► Prediction LB :8001 ──► RabbitMQ (CloudAMQP)
+   │                                                 │            ├──► prediction-service-1 :8001
+   │                                                 │            └──► prediction-service-2 :8001
    │                                                 ├──► Market Service :8002 ──► Redis (Redis Cloud)
    │                                                 └──► Recommendation Service :8003 ──► Redis (Redis Cloud)
    │                                                          ▲                              │
    │                                                          │                              ▼
    │                                                          └──────── Prediction Consumer (no port) ──► Neon PostgreSQL
    │                                                                                              │
-   └──────────────────────────────────────────────────────────────┘
-                                                                                                 │
-   Hugging Face (model download at startup) ◄── Prediction Service                              │
+   └──────────────────────────────────────────────────────────────────────────────┘
+                                                                                                  │
+   Hugging Face (model download at startup) ◄── prediction-service-1 / prediction-service-2       │
    Neon PostgreSQL ◄─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Docker containers:** Next.js, API Gateway, Prediction Service, Market Service, Recommendation Service, Prediction Consumer.
+- **Docker containers:** Next.js, API Gateway, Prediction Load Balancer (Nginx), Prediction Service ×2 replicas, Market Service, Recommendation Service, Prediction Consumer.
 - **External managed services:** Redis Cloud, CloudAMQP (RabbitMQ), Neon PostgreSQL, Hugging Face. These are never run inside Compose.
 
 ### Prerequisites
@@ -146,41 +150,35 @@ Instead of starting each service in its own terminal (see [Run locally](#run-loc
 
 ### Configure environment variables
 
-Environment variables are read from two places:
+Each service reads its variables from its own git-ignored `.env` file, wired into the container via `env_file` in `docker-compose.yml`:
 
-1. **prediction-service** and **prediction-consumer** read their variables directly from their own `.env` files (wired via `env_file` in `docker-compose.yml`):
+```powershell
+Copy-Item services/prediction-service/.env.example    services/prediction-service/.env
+Copy-Item services/prediction-consumer/.env.example   services/prediction-consumer/.env
+Copy-Item services/market-service/.env.example        services/market-service/.env
+Copy-Item services/recommendation-service/.env.example services/recommendation-service/.env
+```
 
-   ```powershell
-   Copy-Item services/prediction-service/.env.example services/prediction-service/.env
-   Copy-Item services/prediction-consumer/.env.example services/prediction-consumer/.env
-   ```
+Then edit each `.env` and fill in the real connection strings:
 
-   - `services/prediction-service/.env` → `RABBITMQ_URL` (leave empty to skip async persistence)
-   - `services/prediction-consumer/.env` → `RABBITMQ_URL` and `DATABASE_URL` (both required for the consumer to start)
+| File                              | Variable(s)                                    | Notes                                    |
+| --------------------------------- | ---------------------------------------------- | ---------------------------------------- |
+| `services/prediction-service/.env`   | `RABBITMQ_URL`                               | leave empty to skip async persistence    |
+| `services/prediction-consumer/.env`  | `RABBITMQ_URL`, `DATABASE_URL`               | both required for the consumer to start  |
+| `services/market-service/.env`       | `REDIS_URL`                                  | Redis Cloud; leave empty to disable caching |
+| `services/recommendation-service/.env`| `REDIS_URL`                                  | Redis Cloud; leave empty to disable caching |
 
-2. **market-service** and **recommendation-service** read their Redis connection string from a root `.env` file (next to `docker-compose.yml`):
-
-   ```powershell
-   Copy-Item .env.example .env
-   ```
-
-   Then edit `.env` and fill in the real connection string:
-
-   | Variable       | Used by                                          | Notes                                    |
-   | -------------- | ------------------------------------------------ | ---------------------------------------- |
-   | `REDIS_URL`    | market-service, recommendation-service           | Redis Cloud; leave empty to disable caching |
-
-The Hugging Face model repository (`MODEL_REPO_ID` / `MODEL_FILENAME`) has sane defaults already baked into `docker-compose.yml`, so no configuration is required for it. No credentials are ever committed — `.env` is git-ignored and only `.env.example` files are tracked, and no `.env` file is copied into any image (each `.dockerignore` excludes `.env`).
+A root `.env` (next to `docker-compose.yml`) is optional and only carries non-secret overrides such as `REDIS_CACHE_TTL_SECONDS`, `MODEL_REPO_ID`, and `MODEL_FILENAME` (all of which already have sane defaults in `docker-compose.yml`). No credentials are ever committed — `.env` is git-ignored and only `.env.example` files are tracked, and no `.env` file is copied into any image (each `.dockerignore` excludes `.env`).
 
 ### Running
 
 ```powershell
-docker compose build       # build all six images
+docker compose build       # build all images
 docker compose up --build  # build (if needed) and start the complete local application
 docker compose down        # stop and remove the containers
 ```
 
-`docker compose up --build` starts the frontend, the gateway, all three backend services, and the prediction consumer together. The frontend is served at `http://localhost:3000` and calls the gateway, which proxies `/api/v1/*` to the correct backend service over the Docker network.
+`docker compose up --build` starts the frontend, the gateway, the prediction load balancer, both prediction-service replicas, the market and recommendation services, and the prediction consumer together. The frontend is served at `http://localhost:3000` and calls the gateway, which proxies `/api/v1/*` to the correct backend service over the Docker network. Prediction requests are distributed across the two replicas by the load balancer (see [Load balancing & horizontal scaling](#load-balancing--horizontal-scaling)).
 
 ### Database migrations (one-off)
 
@@ -196,12 +194,14 @@ docker compose run --rm prediction-consumer alembic upgrade head
 | --------------------- | -------------- | --------- | -------------------------------------------- |
 | `web`                 | 3000           | 3000      | Next.js interface                            |
 | `api-gateway`         | 8000           | 8000      | single HTTP entry point for the backend      |
-| `prediction-service`  | 8001           | —         | internal only (reached via the gateway)      |
+| `prediction-load-balancer` | 8001      | —         | internal only; Nginx in front of the replicas |
+| `prediction-service-1` | 8001          | —         | internal only (reached via the load balancer) |
+| `prediction-service-2` | 8001          | —         | internal only (reached via the load balancer) |
 | `market-service`      | 8002           | —         | internal only (reached via the gateway)      |
 | `recommendation-service` | 8003        | —         | internal only (reached via the gateway)      |
 | `prediction-consumer` | —              | —         | worker; no HTTP port                        |
 
-Only the frontend and the gateway are exposed to the host; everything else is reachable only inside the `gurgaon` network using Docker service names (e.g. the gateway calls `http://prediction-service:8001`).
+Only the frontend and the gateway are exposed to the host; everything else is reachable only inside the `gurgaon` network using Docker service names (e.g. the gateway calls `http://prediction-load-balancer:8001`, which forwards to `prediction-service-1` / `prediction-service-2`).
 
 ### Prediction consumer
 
@@ -223,11 +223,94 @@ The gateway is the single backend entry point for the website. It proxies `/api/
 
 | Gateway path                | Downstream service          |
 | --------------------------- | --------------------------- |
-| `/api/v1/predictions/*`     | `prediction-service :8001`  |
+| `/api/v1/predictions/*`     | `prediction-load-balancer :8001` (→ prediction replicas) |
 | `/api/v1/market/*`          | `market-service :8002`      |
 | `/api/v1/recommendations/*` | `recommendation-service :8003` |
 
-Downstream URLs are configurable in `services/api-gateway/.env` with local defaults (`PREDICTION_SERVICE_URL`, `MARKET_SERVICE_URL`, `RECOMMENDATION_SERVICE_URL`). `GET /health` on the gateway reports the gateway's own status.
+Downstream URLs are configurable in `services/api-gateway/.env` with local defaults (`PREDICTION_SERVICE_URL`, `MARKET_SERVICE_URL`, `RECOMMENDATION_SERVICE_URL`). In Docker Compose, `PREDICTION_SERVICE_URL` is overridden to `http://prediction-load-balancer:8001` so prediction traffic is load balanced across replicas. `GET /health` on the gateway reports the gateway's own status.
+
+## Load balancing & horizontal scaling
+
+The `prediction-service` is the first service to be horizontally scaled: it is stateless (no per-request state, no session, no local database, and the model is fetched from Hugging Face at startup rather than baked into the image), so it can run as many identical replicas as needed. Redis Cloud, CloudAMQP, Neon PostgreSQL and Hugging Face remain shared external services.
+
+```
+                    API Gateway :8000
+                         │
+                         ▼
+             Prediction Load Balancer (Nginx) :8001  ← internal only
+                    /            \
+                   ▼              ▼
+        prediction-service-1   prediction-service-2   (same image & config)
+                   \              /
+                    \            /
+                         ▼
+                     RabbitMQ (CloudAMQP)
+                         │
+                         ▼
+                 Prediction Consumer
+                         │
+                         ▼
+                   Neon PostgreSQL
+```
+
+### How it works
+
+- A lightweight **Nginx** container (`prediction-load-balancer`) sits between the gateway and the two `prediction-service` replicas. It accepts HTTP requests for the prediction service and forwards them to the replicas using **round-robin** (`upstream` block in `services/prediction-load-balancer/nginx.conf`). It runs with a single worker process so round-robin is deterministic, and logs the `$upstream_addr` of each request for easy verification.
+- Both replicas are built from the same image (`build: ./services/prediction-service`) and read the same `.env`, so they share identical configuration. No Dockerfile or application source code is duplicated — the replica definition is declared once as a shared YAML anchor (`x-prediction-service`) in `docker-compose.yml` and referenced by `prediction-service-1` and `prediction-service-2`.
+- The replicas and the load balancer are **internal only** (no host ports); they are reached exclusively through the gateway, so the public architecture (`Browser → API Gateway :8000 → …`) and the frontend API contract are unchanged.
+- The load balancer uses Nginx passive health checks (`max_fails`/`fail_timeout`, plus a short `proxy_connect_timeout`): a replica that stops answering is marked down and skipped until it recovers.
+
+### Starting the scaled architecture
+
+The scaled setup uses the normal Compose commands (both replicas start by default):
+
+```powershell
+docker compose build
+docker compose up --build
+```
+
+`docker compose ps` shows both `prediction-service-1` and `prediction-service-2` running and healthy.
+
+### Verifying round-robin distribution
+
+The load balancer logs each request together with the replica that served it (the `access_log` format in `nginx.conf` appends `-> <replica>:8001`). Send several prediction requests through the gateway, then inspect the load balancer's log:
+
+```powershell
+for ($i=1; $i -le 6; $i++) {
+  curl.exe -s -o NUL -X POST http://localhost:8000/api/v1/predictions `
+    -H "Content-Type: application/json" --data-binary "@payload.json"
+  Start-Sleep -Milliseconds 300
+}
+docker logs gurgaonproject-prediction-load-balancer-1
+```
+
+The `POST` lines alternate between the two replicas' addresses (the `-> 172.x.0.3:8001` vs `-> 172.x.0.4:8001` suffix is the replica that handled each request):
+
+```
+POST /api/v1/predictions ... -> 172.19.0.3:8001   (prediction-service-2)
+POST /api/v1/predictions ... -> 172.19.0.4:8001   (prediction-service-1)
+POST /api/v1/predictions ... -> 172.19.0.3:8001   (prediction-service-2)
+POST /api/v1/predictions ... -> 172.19.0.4:8001   (prediction-service-1)
+```
+
+You can also inspect each replica directly (`docker logs prediction-service-1` / `docker logs prediction-service-2`), which shows the same requests split across the two containers. No replica-identifying fields are added to the prediction response — verification is done purely via logs, so the API schema is unchanged.
+
+### Simulating a replica failure
+
+```powershell
+docker stop prediction-service-1    # stop one replica
+# requests keep working through prediction-service-2
+docker start prediction-service-1   # bring it back
+```
+
+When a replica stops, Nginx's passive health check (`max_fails=2 fail_timeout=30s`) marks it down after a couple of failed connections and routes everything to the healthy replica; a short `proxy_connect_timeout 2s` keeps that failover fast. After the replica returns (and `fail_timeout` elapses, ~30s) Nginx re-enables it and round-robin resumes. This is basic passive failover — no retries, circuit breakers, autoscaling, or advanced failover logic are implemented in this phase.
+
+### Load balancing vs. RabbitMQ consumer scaling
+
+These are two different distribution concerns and should not be confused:
+
+- **Load Balancer** distributes **synchronous HTTP requests** across multiple replicas of a stateless service (`prediction-service`) so the API can serve more traffic. It is application-agnostic and lives at the HTTP edge.
+- **RabbitMQ** distributes **asynchronous messages** (`prediction_created` events) from producers to consumers. Each prediction publishes exactly one event, regardless of which replica handled the HTTP request; the single `prediction-consumer` consumes the shared queue and persists to Neon. Scaling the consumer is a separate concern (more consumers competing on the same queue), not covered in this phase.
 
 ## Frontend configuration
 
@@ -257,7 +340,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
 
 ### Configuration
 
-Each caching service reads its Redis connection string from `REDIS_URL` (loaded through its Pydantic settings from `services/*/.env`). No credentials are committed — `.env` is git-ignored and `.env.example` only contains the placeholder `redis://localhost:6379/0`. The cache TTL is configurable via `REDIS_CACHE_TTL_SECONDS` (default `600`, i.e. 10 minutes).
+Each caching service reads its Redis connection string from the `REDIS_URL` environment variable, which Docker Compose injects from `services/market-service/.env` / `services/recommendation-service/.env` via `env_file`. No credentials are committed — `.env` is git-ignored and `.env.example` only contains the placeholder `redis://localhost:6379/0`. The cache TTL is configurable via `REDIS_CACHE_TTL_SECONDS` (default `600`, i.e. 10 minutes).
 
 ### Cached endpoints
 
