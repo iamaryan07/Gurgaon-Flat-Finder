@@ -2,12 +2,40 @@
 
 import { useEffect, useState } from "react";
 import { getApi } from "@/lib/api";
+import { EmptyState, ErrorState, Skeleton } from "@/components/ui";
+import { IconArrowRight, IconMapPin } from "@/components/icons";
 
 const MODES = [
   ["location", "Near a landmark"],
   ["similar", "Similar society"],
   ["hybrid", "Hybrid match"],
 ];
+
+function PropertyCard({ item, index }) {
+  return (
+    <article className="prop-card" style={{ animationDelay: `${Math.min(index * 60, 360)}ms` }}>
+      <div className="prop-tags">
+        <span className="badge">{item.sector}</span>
+        {item.distance_km ? (
+          <span className="badge badge-neutral">
+            <IconMapPin size={12} />
+            {item.distance_km} km away
+          </span>
+        ) : null}
+      </div>
+      <h3 className="prop-name">{item.property_name}</h3>
+      <p className="prop-price">₹ {item.price} Cr</p>
+      <div className="prop-specs">
+        <span>{item.bedroom} BHK</span>
+        <span>{item.area.toLocaleString()} sq ft</span>
+      </div>
+      <a className="prop-link" href={item.url} target="_blank" rel="noreferrer">
+        View listing
+        <IconArrowRight size={14} />
+      </a>
+    </article>
+  );
+}
 
 export function RecommendationTool() {
   const [mode, setMode] = useState("location");
@@ -22,18 +50,21 @@ export function RecommendationTool() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    getApi("recommendations/landmarks")
-      .then((result) => {
-        setLandmarks(result);
-        setLandmark(result[0] ?? "");
+    let active = true;
+    Promise.all([getApi("recommendations/landmarks"), getApi("recommendations/societies")])
+      .then(([landmarkList, societyList]) => {
+        if (!active) return;
+        setLandmarks(landmarkList);
+        setLandmark(landmarkList[0] ?? "");
+        setSocieties(societyList);
+        setSociety(societyList[0] ?? "");
       })
-      .catch(() => setError("Could not load landmarks."));
-    getApi("recommendations/societies")
-      .then((result) => {
-        setSocieties(result);
-        setSociety(result[0] ?? "");
-      })
-      .catch(() => setError("Could not load societies."));
+      .catch(() => {
+        if (active) setError("Could not load landmarks and societies. Check your connection and retry.");
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   async function search(event) {
@@ -58,98 +89,147 @@ export function RecommendationTool() {
     }
   }
 
-  return (
-    <div className="tool-content">
-      <div className="tool-intro">
-        <p className="eyebrow">Society recommender</p>
-        <h2>Find your next shortlist.</h2>
-        <p>
-          Three retrieval modes: landmark radius, similar configuration, or a hybrid
-          blend of location and price.
-        </p>
-      </div>
+  function changeMode(next) {
+    setMode(next);
+    setItems([]);
+    setError("");
+  }
 
-      <div className="mode-tabs">
+  return (
+    <div>
+      <div className="segmented" role="tablist" aria-label="Recommendation mode">
         {MODES.map(([id, label]) => (
           <button
-            className={mode === id ? "selected" : ""}
-            onClick={() => {
-              setMode(id);
-              setItems([]);
-              setError("");
-            }}
             key={id}
+            type="button"
+            role="tab"
+            aria-selected={mode === id}
+            className={mode === id ? "selected" : ""}
+            onClick={() => changeMode(id)}
           >
             {label}
           </button>
         ))}
       </div>
 
-      <form className="compact-form recommendation-form" onSubmit={search}>
+      <form className="rec-controls" onSubmit={search}>
         {mode === "location" ? (
           <>
-            <label>
-              Landmark
-              <select value={landmark} onChange={(e) => setLandmark(e.target.value)}>
-                {landmarks.map((name) => (
-                  <option key={name}>{name}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Radius (km)
+            <div className="field">
+              <label className="field-label" htmlFor="rec-landmark">Landmark</label>
+              <div className="select-wrap">
+                <select
+                  id="rec-landmark"
+                  className="select-input"
+                  value={landmark}
+                  onChange={(e) => setLandmark(e.target.value)}
+                >
+                  {landmarks.map((name) => (
+                    <option key={name}>{name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="field">
+              <label className="field-label" htmlFor="rec-radius">
+                Radius
+                <span className="field-unit">km</span>
+              </label>
               <input
+                id="rec-radius"
+                className="input"
                 type="number"
                 min="1"
                 max="30"
                 value={radius}
                 onChange={(e) => setRadius(Number(e.target.value))}
               />
-            </label>
+            </div>
           </>
         ) : (
           <>
-            <label>
-              Society
-              <select value={society} onChange={(e) => setSociety(e.target.value)}>
-                {societies.map((name) => (
-                  <option key={name}>{name}</option>
-                ))}
-              </select>
-            </label>
-            {mode === "hybrid" && (
-              <label>
-                Prioritise
-                <select value={preference} onChange={(e) => setPreference(e.target.value)}>
-                  <option value="location">Location similarity</option>
-                  <option value="price">Price &amp; configuration</option>
+            <div className="field">
+              <label className="field-label" htmlFor="rec-society">Society</label>
+              <div className="select-wrap">
+                <select
+                  id="rec-society"
+                  className="select-input"
+                  value={society}
+                  onChange={(e) => setSociety(e.target.value)}
+                >
+                  {societies.map((name) => (
+                    <option key={name}>{name}</option>
+                  ))}
                 </select>
-              </label>
+              </div>
+            </div>
+            {mode === "hybrid" && (
+              <div className="field">
+                <label className="field-label" htmlFor="rec-preference">Prioritise</label>
+                <div className="select-wrap">
+                  <select
+                    id="rec-preference"
+                    className="select-input"
+                    value={preference}
+                    onChange={(e) => setPreference(e.target.value)}
+                  >
+                    <option value="location">Location similarity</option>
+                    <option value="price">Price &amp; configuration</option>
+                  </select>
+                </div>
+              </div>
             )}
           </>
         )}
-        <button disabled={loading}>{loading ? "Searching…" : "Find recommendations"}</button>
+        <button className="btn" type="submit" disabled={loading}>
+          {loading && <span className="spinner" aria-hidden="true" />}
+          {loading ? "Searching…" : "Find recommendations"}
+        </button>
       </form>
 
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <div style={{ marginTop: 22 }}>
+          <ErrorState title="Search failed" message={error} onRetry={() => changeMode(mode)} />
+        </div>
+      )}
 
-      {items.length > 0 && (
-        <div className="match-grid">
-          {items.map((item, index) => (
-            <article key={`${item.property_name}-${index}`}>
-              <span>
-                {item.sector}
-                {item.distance_km ? ` · ${item.distance_km} km` : ""}
-              </span>
-              <b>{item.property_name}</b>
-              <p>
-                {item.bedroom} BHK · {item.area.toLocaleString()} ft² · ₹ {item.price} Cr
-              </p>
-              <a href={item.url} target="_blank" rel="noreferrer">
-                View listing →
-              </a>
-            </article>
+      {loading && (
+        <div className="property-grid" aria-busy="true">
+          {[0, 1, 2].map((index) => (
+            <div className="prop-card" key={index}>
+              <Skeleton style={{ display: "block", width: 90, height: 24, borderRadius: 999 }} />
+              <Skeleton style={{ display: "block", width: "80%", height: 20 }} />
+              <Skeleton style={{ display: "block", width: "45%", height: 26 }} />
+              <Skeleton style={{ display: "block", width: "100%", height: 14 }} />
+              <Skeleton style={{ display: "block", width: "35%", height: 14 }} />
+            </div>
           ))}
+        </div>
+      )}
+
+      {!loading && !error && items.length > 0 && (
+        <>
+          <p style={{ marginTop: 26, color: "var(--muted)", fontSize: 13.5, fontWeight: 600 }}>
+            {items.length} {items.length === 1 ? "match" : "matches"} found
+          </p>
+          <div className="property-grid">
+            {items.map((item, index) => (
+              <PropertyCard item={item} index={index} key={`${item.property_name}-${index}`} />
+            ))}
+          </div>
+        </>
+      )}
+
+      {!loading && !error && items.length === 0 && (
+        <div style={{ marginTop: 26 }}>
+          <EmptyState
+            title="No recommendations yet"
+            message={
+              mode === "location"
+                ? `Pick a landmark such as “${landmarks[0] ?? "Cyber Hub"}”, set a radius and search to see societies nearby.`
+                : "Choose a society and run a search to see similar configurations."
+            }
+          />
         </div>
       )}
     </div>

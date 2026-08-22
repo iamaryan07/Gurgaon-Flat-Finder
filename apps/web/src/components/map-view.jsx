@@ -21,14 +21,14 @@ const PLACES = [
 ];
 
 const STOPS = [
-  [0, [255, 255, 204]],
-  [0.25, [255, 237, 160]],
-  [0.5, [254, 178, 76]],
-  [0.75, [240, 59, 32]],
-  [1, [189, 0, 38]],
+  [0, [232, 241, 236]],
+  [0.25, [169, 211, 191]],
+  [0.5, [79, 155, 120]],
+  [0.75, [27, 94, 74]],
+  [1, [14, 61, 46]],
 ];
 
-function ylOrRd(price, min, max) {
+function priceRamp(price, min, max) {
   const t = max === min ? 0.5 : Math.max(0, Math.min(1, (price - min) / (max - min)));
   let i = 0;
   while (i < STOPS.length - 2 && t > STOPS[i + 1][0]) i += 1;
@@ -110,7 +110,7 @@ export default function MapView({ geojson, priceMap, priceMin, priceMax }) {
           color: "#101418",
           weight: 0.8,
           opacity: 0.9,
-          fillColor: ylOrRd(price, priceMin, priceMax),
+          fillColor: priceRamp(price, priceMin, priceMax),
           fillOpacity: 0.78,
         };
       },

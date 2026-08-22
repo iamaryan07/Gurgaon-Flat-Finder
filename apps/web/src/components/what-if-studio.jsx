@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getPredictionOptions, predictPrice } from "@/lib/api";
+import { rupees } from "@/components/ui";
 
 const BASE = {
   sector: "Sector 65",
@@ -53,10 +54,6 @@ const FALLBACK_OPTIONS = {
   nearby: ["Education", "Healthcare", "Religious", "Residentail", "Shopping", "Transport"],
   overlooking: ["Club", "Main Road"],
 };
-
-function rupees(crore) {
-  return `₹ ${Number(crore).toFixed(2)} Cr`;
-}
 
 function nextValue(feature, current, options) {
   if (feature.type === "boolean") return !current;
@@ -113,26 +110,37 @@ export function WhatIfStudio() {
     }
   }
 
-  function renderInput(value, onChange) {
+  function renderInput(value, onChange, id) {
     if (feature.type === "select") {
       return (
-        <select value={value} onChange={(e) => onChange(e.target.value)}>
-          {list.map((option) => (
-            <option key={option}>{option}</option>
-          ))}
-        </select>
+        <div className="select-wrap">
+          <select id={id} className="select-input" value={value} onChange={(e) => onChange(e.target.value)}>
+            {list.map((option) => (
+              <option key={option}>{option}</option>
+            ))}
+          </select>
+        </div>
       );
     }
     if (feature.type === "boolean") {
       return (
-        <select value={String(value)} onChange={(e) => onChange(e.target.value === "true")}>
-          <option value="false">No</option>
-          <option value="true">Yes</option>
-        </select>
+        <div className="select-wrap">
+          <select
+            id={id}
+            className="select-input"
+            value={String(value)}
+            onChange={(e) => onChange(e.target.value === "true")}
+          >
+            <option value="false">No</option>
+            <option value="true">Yes</option>
+          </select>
+        </div>
       );
     }
     return (
       <input
+        id={id}
+        className="input"
         type="number"
         min={feature.min}
         max={feature.max}
@@ -146,55 +154,69 @@ export function WhatIfStudio() {
   const diff = result ? result.b.predicted_price_crore - result.a.predicted_price_crore : 0;
 
   return (
-    <div className="what-if-studio">
+    <section className="whatif-card">
       <h3>What-if studio</h3>
-      <p className="data-note">
-        Hold a typical Gurgaon property constant and test how changing a single
-        feature affects the model estimate.
+      <p>
+        Hold a typical Gurgaon property constant and test how changing a single feature
+        affects the model estimate.
       </p>
-      <form className="compact-form insight-form" onSubmit={compare}>
-        <label>
-          Feature
-          <select value={featureKey} onChange={(e) => changeFeature(e.target.value)}>
-            {FEATURES.map((f) => (
-              <option key={f.key} value={f.key}>
-                {f.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Original value
-          {renderInput(original, setOriginal)}
-        </label>
-        <label>
-          New value
-          {renderInput(newValue, setNewValue)}
-        </label>
-        <button disabled={loading}>{loading ? "Comparing…" : "Compare values"}</button>
+      <form className="whatif-form" onSubmit={compare}>
+        <div className="field">
+          <label className="field-label" htmlFor="wi-feature">Feature</label>
+          <div className="select-wrap">
+            <select
+              id="wi-feature"
+              className="select-input"
+              value={featureKey}
+              onChange={(e) => changeFeature(e.target.value)}
+            >
+              {FEATURES.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor="wi-original">Original value</label>
+          {renderInput(original, setOriginal, "wi-original")}
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor="wi-new">New value</label>
+          {renderInput(newValue, setNewValue, "wi-new")}
+        </div>
+        <button className="btn btn-light" type="submit" disabled={loading}>
+          {loading && <span className="spinner" aria-hidden="true" style={{ borderTopColor: "#14171a", borderColor: "rgba(20,23,26,.25)" }} />}
+          {loading ? "Comparing…" : "Compare values"}
+        </button>
       </form>
 
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <p role="alert" style={{ marginTop: 16, color: "#e8a08d", fontSize: 13.5, fontWeight: 600 }}>
+          {error}
+        </p>
+      )}
 
       {result && (
-        <div className="impact">
-          <div>
+        <div className="impact-grid">
+          <div className="impact-cell">
             <span>Current estimate</span>
             <b>{rupees(result.a.predicted_price_crore)}</b>
           </div>
-          <div>
+          <div className="impact-cell">
             <span>New estimate</span>
             <b>{rupees(result.b.predicted_price_crore)}</b>
           </div>
-          <div className="delta">
+          <div className={`impact-cell${diff >= 0 ? " delta" : ""}`}>
             <span>Estimated change</span>
-            <b>
+            <b style={diff < 0 ? { color: "#e8a08d" } : undefined}>
               {diff >= 0 ? "+" : ""}
               {rupees(diff)}
             </b>
           </div>
         </div>
       )}
-    </div>
+    </section>
   );
 }
